@@ -35,11 +35,11 @@ import {
   Field,
   type DialogOpenChangeData,
 } from "@fluentui/react-components";
-import { SearchRegular, EditRegular } from "@fluentui/react-icons";
+import { SearchRegular, EditRegular, AddRegular } from "@fluentui/react-icons";
 
 type TeamsTheme = "default" | "dark" | "contrast";
 
-type OrderStatus = "Pending" | "Processing" | "Shipped" | "Delivered" | "Cancelled";
+type OrderStatus = "Submitted" | "Pending" | "Processing" | "Shipped" | "Delivered" | "Cancelled";
 
 interface Order {
   id: string;
@@ -49,9 +49,10 @@ interface Order {
   date: string;
 }
 
-const ALL_STATUSES: OrderStatus[] = ["Pending", "Processing", "Shipped", "Delivered", "Cancelled"];
+const ALL_STATUSES: OrderStatus[] = ["Submitted", "Pending", "Processing", "Shipped", "Delivered", "Cancelled"];
 
 const STATUS_APPEARANCE: Record<OrderStatus, "warning" | "informative" | "success" | "important"> = {
+  Submitted:  "informative",
   Pending:    "warning",
   Processing: "informative",
   Shipped:    "success",
@@ -92,6 +93,13 @@ export default function App() {
   const [saving, setSaving] = React.useState(false);
   const [saveError, setSaveError] = React.useState<string | null>(null);
 
+  // New order dialog state
+  const emptyDraft = (): { customer: string; amount: number } => ({ customer: "", amount: 0 });
+  const [newOrderOpen, setNewOrderOpen] = React.useState(false);
+  const [newDraft, setNewDraft] = React.useState<{ customer: string; amount: number }>(emptyDraft());
+  const [creating, setCreating] = React.useState(false);
+  const [createError, setCreateError] = React.useState<string | null>(null);
+
   const openEdit = (order: Order) => {
     setEditOrder(order);
     setEditDraft({ ...order });
@@ -102,6 +110,29 @@ export default function App() {
     setEditOrder(null);
     setEditDraft(null);
     setSaveError(null);
+  };
+
+  const handleCreate = async () => {
+    if (!newDraft.customer.trim()) return;
+    setCreating(true);
+    setCreateError(null);
+    try {
+      const res = await fetch("/api/orders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(newDraft),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const created: Order = await res.json();
+      // Also add locally immediately (SSE may deduplicate)
+      setOrders((prev) => prev.some((o) => o.id === created.id) ? prev : [...prev, created]);
+      setNewOrderOpen(false);
+      setNewDraft(emptyDraft());
+    } catch (err) {
+      setCreateError(String(err));
+    } finally {
+      setCreating(false);
+    }
   };
 
   const handleSave = async () => {
@@ -157,6 +188,18 @@ export default function App() {
       .finally(() => setLoading(false));
   }, []);
 
+  // SSE – auto-append any new order pushed by the server
+  React.useEffect(() => {
+    const es = new EventSource("/api/orders/events");
+    es.onmessage = (e) => {
+      try {
+        const order: Order = JSON.parse(e.data as string);
+        setOrders((prev) => prev.some((o) => o.id === order.id) ? prev : [...prev, order]);
+      } catch { /* ignore */ }
+    };
+    return () => es.close();
+  }, []);
+
   const filtered = React.useMemo(
     () => orders.filter((o) => {
       const matchesSearch =
@@ -184,9 +227,69 @@ export default function App() {
 
   return (
     <FluentProvider theme={FLUENT_THEME[theme]} style={{ minHeight: "100vh", padding: "1.5rem" }}>
-      <Text as="h1" size={700} weight="semibold" block style={{ marginBottom: "1rem" }}>
-        Orders
-      </Text>
+      <div style={{ display: "flex", alignItems: "center", gap: "1rem", marginBottom: "1rem" }}>
+        <Text as="h1" size={700} weight="semibold" block style={{ margin: 0 }}>
+          Orders
+        </Text>
+        <Button
+          appearance="primary"
+          icon={<AddRegular />}
+          onClick={() => { setNewDraft(emptyDraft()); setCreateError(null); setNewOrderOpen(true); }}
+        >
+          New Order
+        </Button>
+      </div>
+
+      {/* New Order dialog */}
+      <Dialog
+        open={newOrderOpen}
+        onOpenChange={(_e: React.SyntheticEvent, data: DialogOpenChangeData) => {
+          if (!data.open) { setNewOrderOpen(false); setCreateError(null); }
+        }}
+      >
+        <DialogSurface>
+          <DialogTitle>New Order</DialogTitle>
+          <DialogBody>
+            <DialogContent>
+              {createError && (
+                <MessageBar intent="error" style={{ marginBottom: "0.75rem" }}>
+                  <MessageBarBody>{createError}</MessageBarBody>
+                </MessageBar>
+              )}
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+                <Field label="Customer" required>
+                  <Input
+                    value={newDraft.customer}
+                    onChange={(_e, d) => setNewDraft((p) => ({ ...p, customer: d.value }))}
+                    autoFocus
+                  />
+                </Field>
+                <Field label="Amount" required>
+                  <Input
+                    type="number"
+                    value={String(newDraft.amount)}
+                    onChange={(_e, d) =>
+                      setNewDraft((p) => ({ ...p, amount: parseFloat(d.value) || 0 }))
+                    }
+                  />
+                </Field>
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button
+                appearance="primary"
+                onClick={handleCreate}
+                disabled={creating || !newDraft.customer.trim()}
+              >
+                {creating ? "Creating…" : "Create"}
+              </Button>
+              <Button appearance="secondary" onClick={() => setNewOrderOpen(false)} disabled={creating}>
+                Cancel
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
 
       {/* Edit dialog */}
       <Dialog

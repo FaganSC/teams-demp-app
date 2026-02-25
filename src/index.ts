@@ -6,7 +6,7 @@ import { App, HttpPlugin, IPlugin } from "@microsoft/teams.apps";
 import { ConsoleLogger } from "@microsoft/teams.common/logging";
 import { DevtoolsPlugin } from "@microsoft/teams.dev";
 
-import { listOrders, renameCustomer, seedIfEmpty, updateOrder, type OrderStatus } from "./ordersService.js";
+import { createOrder, listOrders, renameCustomer, seedIfEmpty, updateOrder, type Order, type OrderStatus } from "./ordersService.js";
 
 const STORAGE_CONNECTION =
   process.env.AZURE_STORAGE_CONNECTION_STRING ?? "UseDevelopmentStorage=true";
@@ -29,6 +29,43 @@ app.tab("customers", path.join(__dirname, "./Customers"));
 
 // REST API – orders
 app.http.use(require("express").json());
+
+// SSE – push new orders to all connected clients
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const sseClients = new Set<any>();
+
+function broadcastNewOrder(order: Order): void {
+  const payload = `data: ${JSON.stringify(order)}\n\n`;
+  for (const client of sseClients) {
+    if (!client.writableEnded) client.write(payload);
+  }
+}
+
+app.http.get("/api/orders/events", (req: any, res: any) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders();
+  sseClients.add(res);
+  req.on("close", () => sseClients.delete(res));
+});
+
+app.http.post("/api/orders", async (req: any, res: any) => {
+  try {
+    const { customer, amount } = req.body as { customer: string; amount: number };
+    const today = new Date().toISOString().slice(0, 10);
+    const created = await createOrder(STORAGE_CONNECTION, {
+      customer,
+      amount,
+      status: "Submitted",
+      date: today,
+    });
+    broadcastNewOrder(created);
+    res.status(201).json(created);
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
 
 app.http.get("/api/orders", async (_req, res) => {
   try {

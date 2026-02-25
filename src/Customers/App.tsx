@@ -37,9 +37,10 @@ import { SearchRegular, EditRegular, OpenRegular } from "@fluentui/react-icons";
 
 type TeamsTheme = "default" | "dark" | "contrast";
 
-type OrderStatus = "Pending" | "Processing" | "Shipped" | "Delivered" | "Cancelled";
+type OrderStatus = "Submitted" | "Pending" | "Processing" | "Shipped" | "Delivered" | "Cancelled";
 
 const STATUS_APPEARANCE: Record<OrderStatus, "warning" | "informative" | "success" | "important"> = {
+  Submitted:  "informative",
   Pending:    "warning",
   Processing: "informative",
   Shipped:    "success",

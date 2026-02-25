@@ -1,6 +1,6 @@
 import { TableClient, TableServiceClient, TableTransaction } from "@azure/data-tables";
 
-export type OrderStatus = "Pending" | "Processing" | "Shipped" | "Delivered" | "Cancelled";
+export type OrderStatus = "Submitted" | "Pending" | "Processing" | "Shipped" | "Delivered" | "Cancelled";
 
 export interface Order {
   id: string;
@@ -21,7 +21,7 @@ const CUSTOMERS = [
   "Coho Winery",        "Relecloud",             "Trey Research",
 ];
 
-const STATUSES: OrderStatus[] = ["Pending", "Processing", "Shipped", "Delivered", "Cancelled"];
+const STATUSES: OrderStatus[] = ["Submitted", "Pending", "Processing", "Shipped", "Delivered", "Cancelled"];
 
 function randomDate(daysBack = 365): string {
   const now = new Date("2026-02-24");
@@ -93,6 +93,33 @@ export async function listOrders(connectionString: string): Promise<Order[]> {
   }
 
   return orders.sort((a, b) => a.id.localeCompare(b.id));
+}
+
+/** Creates a new order, auto-incrementing the numeric portion of the ID. */
+export async function createOrder(
+  connectionString: string,
+  data: Omit<Order, "id">,
+): Promise<Order> {
+  const { table } = getClients(connectionString);
+
+  let maxNum = 0;
+  for await (const entity of table.listEntities({ queryOptions: { select: ["rowKey"] } })) {
+    const match = entity.rowKey?.match(/^ORD-(\d+)$/);
+    if (match) maxNum = Math.max(maxNum, parseInt(match[1], 10));
+  }
+  const id = `ORD-${String(maxNum + 1).padStart(3, "0")}`;
+
+  await table.createEntity({
+    partitionKey: PARTITION_KEY,
+    rowKey: id,
+    id,
+    customer: data.customer,
+    amount: data.amount,
+    status: data.status,
+    date: data.date,
+  });
+
+  return { id, ...data };
 }
 
 /** Renames a customer on all their orders. Returns the number of orders updated. */
