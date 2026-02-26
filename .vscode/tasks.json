@@ -10,6 +10,7 @@
                 "Validate prerequisites",
                 "Provision",
                 "Deploy",
+                "Start Azurite",
                 "Start application"
             ],
             "dependsOrder": "sequence"
@@ -50,6 +51,25 @@
             "command": "deploy",
             "args": {
                 "env": "local"
+            }
+        },
+        {
+            "label": "Start Azurite",
+            "type": "shell",
+            "command": "npx azurite --silent --location ./.azurite --debug ./.azurite/debug.log",
+            "isBackground": true,
+            "problemMatcher": {
+                "pattern": {
+                    "regexp": "^.*$",
+                    "file": 0,
+                    "location": 1,
+                    "message": 2
+                },
+                "background": {
+                    "activeOnStart": true,
+                    "beginsPattern": ".*",
+                    "endsPattern": "Azurite.*successfully listening"
+                }
             }
         },
         {
