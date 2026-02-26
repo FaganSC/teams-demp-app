@@ -188,13 +188,20 @@ export default function App() {
       .finally(() => setLoading(false));
   }, []);
 
-  // SSE – auto-append any new order pushed by the server
+  // SSE – auto-append new orders and reflect status updates from bot actions
   React.useEffect(() => {
     const es = new EventSource("/api/orders/events");
     es.onmessage = (e) => {
       try {
-        const order: Order = JSON.parse(e.data as string);
-        setOrders((prev) => prev.some((o) => o.id === order.id) ? prev : [...prev, order]);
+        const payload = JSON.parse(e.data as string) as
+          | Order
+          | { type: "order.updated"; order: Order };
+        if ("type" in payload && payload.type === "order.updated") {
+          setOrders((prev) => prev.map((o) => o.id === payload.order.id ? payload.order : o));
+        } else {
+          const order = payload as Order;
+          setOrders((prev) => prev.some((o) => o.id === order.id) ? prev : [...prev, order]);
+        }
       } catch { /* ignore */ }
     };
     return () => es.close();
@@ -220,7 +227,7 @@ export default function App() {
     sort: { getSortDirection, toggleColumnSort, sort },
   } = useTableFeatures(
     { columns, items: filtered },
-    [useTableSort({ defaultSortState: { sortColumn: "date", sortDirection: "descending" } })]
+    [useTableSort({ defaultSortState: { sortColumn: "id", sortDirection: "descending" } })]
   );
 
   const rows = sort(getRows());

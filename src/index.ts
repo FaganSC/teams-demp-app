@@ -7,6 +7,14 @@ import { ConsoleLogger } from "@microsoft/teams.common/logging";
 import { DevtoolsPlugin } from "@microsoft/teams.dev";
 
 import { createOrder, listOrders, renameCustomer, seedIfEmpty, updateOrder, type Order, type OrderStatus } from "./ordersService.js";
+import {
+  buildConfirmedCard,
+  buildNewOrderCard,
+  ensureSubTable,
+  listConversations,
+  removeConversation,
+  saveConversation,
+} from "./botService.js";
 
 const STORAGE_CONNECTION =
   process.env.AZURE_STORAGE_CONNECTION_STRING ?? "UseDevelopmentStorage=true";
@@ -35,11 +43,91 @@ app.http.use(require("express").json());
 const sseClients = new Set<any>();
 
 function broadcastNewOrder(order: Order): void {
+  // 1. SSE to open browser tabs
   const payload = `data: ${JSON.stringify(order)}\n\n`;
   for (const client of sseClients) {
     if (!client.writableEnded) client.write(payload);
   }
+
+  // 2. Adaptive card notification to every installed Teams conversation
+  const card = buildNewOrderCard(order);
+  // Serialize to a plain JSON object so no class-instance quirks survive HTTP serialization
+  const cardJson = JSON.parse(JSON.stringify(card));
+
+  listConversations(STORAGE_CONNECTION)
+    .then((conversationIds) => {
+      app.log.info(`[bot] broadcasting new order ${order.id} to ${conversationIds.length} conversation(s)`);
+      for (const conversationId of conversationIds) {
+        app.send(conversationId, {
+          type: "message",
+          attachments: [{
+            contentType: "application/vnd.microsoft.card.adaptive",
+            content: cardJson,
+          }],
+        } as any).catch((err: unknown) => {
+          app.log.error(`[bot] failed to deliver to ${conversationId}: ${String(err)}`);
+        });
+      }
+    })
+    .catch((err: unknown) => {
+      app.log.error(`[bot] failed to list conversations: ${String(err)}`);
+    });
 }
+
+// ── Bot: capture conversation on install / remove ─────────────────────────
+app.on("install.add", async (ctx) => {
+  const convId = ctx.activity.conversation.id;
+  await saveConversation(STORAGE_CONNECTION, convId, ctx.activity.serviceUrl ?? "");
+  app.log.info(`[bot] conversation stored: ${convId}`);
+});
+
+app.on("install.remove", async (ctx) => {
+  const convId = ctx.activity.conversation.id;
+  await removeConversation(STORAGE_CONNECTION, convId);
+  app.log.info(`[bot] conversation removed: ${convId}`);
+});
+
+// ── Bot: handle Accept / Cancel button taps on the new-order card ────────
+app.on("card.action", async (ctx) => {
+  const action = ctx.activity.value.action;
+  const verb: string = action?.verb ?? "";
+  const data = action?.data as Record<string, unknown>;
+  const orderId = typeof data?.orderId === "string" ? data.orderId : "";
+
+  if (!orderId || (verb !== "order.accept" && verb !== "order.cancel")) {
+    return {
+      statusCode: 400 as const,
+      type: "application/vnd.microsoft.error" as const,
+      value: { code: "BadRequest", message: "Unknown action", innerHttpError: { statusCode: 400, body: {} } },
+    };
+  }
+
+  const newStatus: OrderStatus = verb === "order.accept" ? "Pending" : "Cancelled";
+
+  try {
+    const updated = await updateOrder(STORAGE_CONNECTION, orderId, { status: newStatus });
+    const actedBy = ctx.activity.from?.name ?? "Unknown";
+    const confirmedCard = buildConfirmedCard(updated, actedBy);
+
+    // Broadcast the status change via SSE so open tabs refresh
+    const ssePayload = `data: ${JSON.stringify({ type: "order.updated", order: updated })}\n\n`;
+    for (const client of sseClients) {
+      if (!client.writableEnded) client.write(ssePayload);
+    }
+
+    return {
+      statusCode: 200 as const,
+      type: "application/vnd.microsoft.card.adaptive" as const,
+      value: confirmedCard,
+    };
+  } catch (err) {
+    return {
+      statusCode: 500 as const,
+      type: "application/vnd.microsoft.error" as const,
+      value: { code: "InternalError", message: String(err), innerHttpError: { statusCode: 500, body: {} } },
+    };
+  }
+});
 
 app.http.get("/api/orders/events", (req: any, res: any) => {
   res.setHeader("Content-Type", "text/event-stream");
@@ -52,15 +140,15 @@ app.http.get("/api/orders/events", (req: any, res: any) => {
 
 app.http.post("/api/orders", async (req: any, res: any) => {
   try {
-    const { customer, amount } = req.body as { customer: string; amount: number };
+    const { customer, amount: rawAmount } = req.body as { customer: string; amount: number | string };
+    const amount = Number(rawAmount);
     const today = new Date().toISOString().slice(0, 10);
     const created = await createOrder(STORAGE_CONNECTION, {
       customer,
       amount,
       status: "Submitted",
       date: today,
-    });
-    broadcastNewOrder(created);
+    }, broadcastNewOrder);
     res.status(201).json(created);
   } catch (err) {
     res.status(500).json({ error: String(err) });
@@ -110,5 +198,6 @@ app.http.put("/api/orders/:id", async (req, res) => {
 
 (async () => {
   await seedIfEmpty(STORAGE_CONNECTION);
+  await ensureSubTable(STORAGE_CONNECTION);
   await app.start(+(process.env.PORT || 3978));
 })();

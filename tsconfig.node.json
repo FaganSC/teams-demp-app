@@ -21,7 +21,7 @@
     "rootDir": "src",
     "types": ["node"]
   },
-  "include": ["src/index.ts", "src/ordersService.ts"],
+  "include": ["src/index.ts", "src/ordersService.ts", "src/botService.ts"],
   "ts-node": {
     "transpileOnly": true
   }

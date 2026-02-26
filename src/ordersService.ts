@@ -75,7 +75,7 @@ export async function seedIfEmpty(connectionString: string): Promise<void> {
   await table.submitTransaction(transaction.actions);
 }
 
-/** Returns all orders sorted by ID. */
+/** Returns all orders sorted by ID descending. */
 export async function listOrders(connectionString: string): Promise<Order[]> {
   const { table } = getClients(connectionString);
   const orders: Order[] = [];
@@ -86,19 +86,20 @@ export async function listOrders(connectionString: string): Promise<Order[]> {
     orders.push({
       id: entity.rowKey!,
       customer: entity.customer,
-      amount: entity.amount,
+      amount: Number(entity.amount),
       status: entity.status as OrderStatus,
       date: entity.date,
     });
   }
 
-  return orders.sort((a, b) => a.id.localeCompare(b.id));
+  return orders.sort((a, b) => b.id.localeCompare(a.id));
 }
 
 /** Creates a new order, auto-incrementing the numeric portion of the ID. */
 export async function createOrder(
   connectionString: string,
   data: Omit<Order, "id">,
+  notify?: (order: Order) => void,
 ): Promise<Order> {
   const { table } = getClients(connectionString);
 
@@ -119,7 +120,9 @@ export async function createOrder(
     date: data.date,
   });
 
-  return { id, ...data };
+  const order: Order = { id, ...data, amount: Number(data.amount) };
+  notify?.(order);
+  return order;
 }
 
 /** Renames a customer on all their orders. Returns the number of orders updated. */
@@ -138,7 +141,7 @@ export async function renameCustomer(
       toUpdate.push({
         id: entity.rowKey!,
         customer: entity.customer,
-        amount: entity.amount,
+        amount: Number(entity.amount),
         status: entity.status as OrderStatus,
         date: entity.date,
       });
@@ -187,7 +190,7 @@ export async function updateOrder(
   return {
     id,
     customer: updated.customer,
-    amount:   updated.amount,
+    amount:   Number(updated.amount),
     status:   updated.status as OrderStatus,
     date:     updated.date,
   };
